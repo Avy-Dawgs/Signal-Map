@@ -23,7 +23,7 @@ def _handle_packet(pkt) -> None:
 
 class WifiInterface:
     '''
-    Class to control
+    Class to interface with and control a WiFi card.
     '''
     _card_name: str
     _card: pyw.Card
@@ -90,4 +90,7 @@ class WifiInterface:
         call(["systemctl", "start", "NetworkManager"])
 
     def set_channel(self, channel: int): 
+        '''
+        Set the channel of the WiFi card.
+        '''
         pyw.chset(self._card, channel)
