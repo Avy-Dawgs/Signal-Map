@@ -8,26 +8,7 @@ from scapy.all import sniff, RadioTap
 from subprocess import call
 from time import time
 from numpy import argmax, array
-
-
-class RssiTime: 
-    '''
-    RSSI with an associated time.
-    '''
-    rssi: float 
-    time: float 
-
-    def __init__(self, rssi: float, time: float): 
-        '''
-        Constructor.
-        '''
-        self.rssi = rssi 
-        self.time = time
-    def __str__(self):
-        '''
-        Converts to string.
-        '''
-        return f"rssi: {self.rssi}; time: {self.time}; "
+from shared_types import RssiTime
 
 
 class WifiInterface:
@@ -38,7 +19,10 @@ class WifiInterface:
     __card: pyw.Card
     _channel: int
 
-    def __init__(self, card_name: str): 
+    def __init__(
+            self, 
+            card_name: str
+            ) -> None: 
         '''
         Contructor.
 
@@ -56,7 +40,10 @@ class WifiInterface:
 
         self.__card = pyw.getcard(self._card_name)
 
-    def start_monitor_mode(self, kill_processes: bool) -> None : 
+    def start_monitor_mode(
+            self, 
+            kill_processes: bool
+            ) -> None : 
         '''
         Enter monitor mode, calling a callback 
         every time theres a new RSSI value.
@@ -78,7 +65,10 @@ class WifiInterface:
         else: 
             print("Monitor mode already started.")
 
-    def stop_monitor_mode(self, start_network_manager: bool) -> None: 
+    def stop_monitor_mode(
+            self, 
+            start_network_manager: bool
+            ) -> None: 
         '''
         Stop monitor mode.
 
@@ -92,7 +82,10 @@ class WifiInterface:
         if start_network_manager:
             call(["systemctl", "start", "NetworkManager"])
 
-    def set_channel(self, channel: int): 
+    def set_channel(
+            self, 
+            channel: int
+            ) -> None: 
         '''
         Set the channel of the WiFi card.
         '''
@@ -111,7 +104,11 @@ class WifiRssiMonitor:
     __monitor_thread: Thread
     _seconds_of_data: int
 
-    def __init__(self, wifi: WifiInterface, ch: int): 
+    def __init__(
+            self, 
+            wifi: WifiInterface, 
+            ch: int
+            ) -> None: 
         '''
         Contructor. Starts monitor on given channel.
         '''
@@ -126,13 +123,18 @@ class WifiRssiMonitor:
         self.__monitor_thread = Thread(target=self.__monitor, daemon=True)
         self.__monitor_thread.start()
 
-    def __monitor(self): 
+    def __monitor(
+            self
+            ) -> None: 
         '''
         Run as background thread to monitor rssi.
         '''
         sniff(iface=self.__wifi._card_name, prn=self.__handle_packet, store=0)
 
-    def __handle_packet(self, pkt): 
+    def __handle_packet(
+            self, 
+            pkt
+            ) -> None: 
         '''
         Handle a packet.
         '''
@@ -144,7 +146,10 @@ class WifiRssiMonitor:
         except AttributeError: 
             pass
 
-    def get_max_rssi(self, n: float) -> Optional[RssiTime]:
+    def get_max_rssi(
+            self, 
+            n: float
+            ) -> Optional[RssiTime]:
         '''
         Get the max value over the last n seconds.
 
@@ -177,7 +182,9 @@ class WifiRssiMonitor:
         idx = argmax(array(last_sec_rssi))
         return RssiTime(last_sec_rssi[idx], last_sec_times[idx])
 
-    def stop(self):
+    def stop(
+            self
+            ) -> None:
         '''
         Stop monitoring.
         '''
