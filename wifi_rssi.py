@@ -107,13 +107,14 @@ class WifiRssiMonitor:
     def __init__(
             self, 
             wifi: WifiInterface, 
-            ch: int
+            ch: int, 
+            kill_processes: bool,
             ) -> None: 
         '''
         Contructor. Starts monitor on given channel.
         '''
         self.__wifi = wifi
-        self.__wifi.start_monitor_mode(True)
+        self.__wifi.start_monitor_mode(kill_processes)
         self.__wifi.set_channel(ch)
         self._rssi_list = []
         self._time_list = []

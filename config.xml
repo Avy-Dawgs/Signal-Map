@@ -1,6 +1,6 @@
 <?xml version="1.0" ?>
 <DaemonParams>
-	<mavlink_connection_string>tcp:xxx.xxx</mavlink_connection_string>
+	<mavlink_connection_string>tcpin:xxx.xxx.xx.xx</mavlink_connection_string>
 	<drone_system_id>1</drone_system_id>
 	<drone_component_id>0</drone_component_id>
 	<raspberry_pi_component_id>200</raspberry_pi_component_id>
@@ -8,4 +8,5 @@
 	<wifi_card_name>wlp0s20f3</wifi_card_name>
 	<wifi_channel>11</wifi_channel>
 	<beacon_period>1.0</beacon_period>
+	<log_directory>/home/aidan/Avy-Dawgs/Signal-Map/logs/</log_directory>
 </DaemonParams>

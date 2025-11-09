@@ -23,6 +23,8 @@ params.wifi_channel = 11
 
 params.beacon_period = 1.0
 
+params.log_directory = "/home/aidan/Avy-Dawgs/Signal-Map/logs/"
+
 params.save(savefile)
 
 # test by reloding from file

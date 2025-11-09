@@ -2,9 +2,13 @@
 Daemon to run on comanion computer and collect wifi signals.
 '''
 from typing import Optional
-import sys
-import xmltodict
+from sys import argv
+from xmltodict import parse, unparse
 from xml.dom.minidom import parseString
+
+from mavlink import MavlinkConnectionManager, MavlinkTelemetryMonitor
+from control import Control
+from wifi_rssi import WifiInterface, WifiRssiMonitor
 
 
 '''
@@ -44,16 +48,40 @@ def main(argv: list[str]):
     '''
     if len(argv) != 2: 
         print("Please provide the parameter file as the only argument.")
-        sys.exit()
+        return
 
     # load params 
     params = DaemonParams(argv[1])
 
-    # init mavlink connection
+    # init mavlink manager and telemetry
+    mavlink_manager = MavlinkConnectionManager(
+            params.mavlink_connection_string, 
+            params.drone_system_id, 
+            params.raspberry_pi_component_id, 
+            params.base_station_system_id
+            )
+    mavlink_telemetry = MavlinkTelemetryMonitor(
+            mavlink_manager
+            )
 
     # launch wifi sniffing 
+    wifi_interface = WifiInterface(params.wifi_card_name)
+    wifi_rssi_monitor = WifiRssiMonitor(
+            wifi_interface, 
+            params.wifi_channel, 
+            True        # kill processes
+            )
 
-    # launch mavlink location listening
+    # init controller 
+    ctrl = Control(
+            mavlink_manager, 
+            mavlink_telemetry, 
+            wifi_rssi_monitor, 
+            params.log_directory
+            )
+
+    # run it!!
+    ctrl.run()
 
 
 class DaemonParams: 
@@ -71,6 +99,8 @@ class DaemonParams:
 
     beacon_period: float 
 
+    log_directory: str
+
     def __init__(self, filename: Optional[str]) -> None:
         '''
         Contructor. 
@@ -83,7 +113,7 @@ class DaemonParams:
             return
 
         with open(filename, "r") as f: 
-            d = xmltodict.parse(f.read())
+            d = parse(f.read())
 
         for key, value in d.items():
             setattr(self, key, value)
@@ -96,7 +126,7 @@ class DaemonParams:
             filename: name of file to save to
         '''
         d = {"DaemonParams" : vars(self)}
-        xml_str = parseString(xmltodict.unparse(d)).toprettyxml()
+        xml_str = parseString(unparse(d)).toprettyxml()
 
         with open(filename, "w") as f: 
             f.write(xml_str)
@@ -111,4 +141,4 @@ class DaemonParams:
 
 
 if __name__ == "__main__": 
-    main(sys.argv)
+    main(argv)
