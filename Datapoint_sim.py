@@ -16,13 +16,14 @@ PAYLOAD_LEN = 12
 PAYLOAD_BUF = 128
 TYPE_RSSI_GLOBAL = 4  # Tunnel type for lat/lon/rssi heatmap data
 TYPE_VICTIM_MARKER = 2  # Tunnel type for final victim marker
+_PAYLOAD_STRUCT = struct.Struct("<fff")
+_PAYLOAD_PADDING = bytes(PAYLOAD_BUF - PAYLOAD_LEN)
 
 
 # Helper functions
 def pack_triplet(lat: float, lon: float, rssi: float) -> bytes:
     """Pack lat/lon/rssi into tunnel payload format (12 bytes data + padding)."""
-    body = struct.pack("<fff", float(lat), float(lon), float(rssi))
-    return body + bytes(PAYLOAD_BUF - len(body))
+    return _PAYLOAD_STRUCT.pack(float(lat), float(lon), float(rssi)) + _PAYLOAD_PADDING
 
 
 def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -56,6 +57,7 @@ class DataPoint:
     """
     Represents a single signal detection with GPS coordinates and RSSI value.
     """
+    __slots__ = ("latitude", "longitude", "rssi")
     
     def __init__(self, latitude: float, longitude: float, rssi: float):
         """
@@ -142,6 +144,7 @@ class DataPointCollection:
     """
     Data structure for holding and managing multiple DataPoints.
     """
+    __slots__ = ("data_points",)
 
     def __init__(self):
         """Initialize the data point collection."""
@@ -244,7 +247,9 @@ class MAVLinkDataHandler:
     """
     
     def __init__(self, rx_connection: str, tx_host: str, tx_port: int,
-                 sysid: int = 255, compid: int = 0,
+                 tx_connection: Optional[str] = None,
+                 sysid: int = 200, compid: int = mavutil.mavlink.MAV_COMP_ID_ONBOARD_COMPUTER,
+                 target_sysid: int = 0, target_compid: int = 0,
                  beacon_lat: float = 0.0, beacon_lon: float = 0.0,
                  peak_rssi: float = -30.0, floor_rssi: float = -95.0,
                  sigma_m: float = 40.0, sample_hz: float = 1.0,
@@ -255,10 +260,13 @@ class MAVLinkDataHandler:
         
         Args:
             rx_connection: MAVLink RX connection string
-            tx_host: TX host for sending tunnel messages
-            tx_port: TX UDP port
-            sysid: MAVLink system ID
-            compid: MAVLink component ID
+            tx_host: Flight controller host for sending tunnel messages
+            tx_port: Flight controller UDP port
+            tx_connection: Explicit MAVLink connection string for transmission (overrides tx_host/tx_port)
+            sysid: MAVLink system ID for this companion computer (default: 200 to avoid overlap with vehicle/GCS)
+            compid: MAVLink component ID for this companion computer
+            target_sysid: Target MAVLink system ID for tunnel messages (default: 0 / broadcast)
+            target_compid: Target MAVLink component ID for tunnel messages (default: 0 / broadcast)
             beacon_lat: Beacon latitude for RSSI calculation
             beacon_lon: Beacon longitude for RSSI calculation
             peak_rssi: Peak RSSI at beacon location (default: -30.0 dBm for 457 kHz)
@@ -275,8 +283,11 @@ class MAVLinkDataHandler:
         self.rx_connection = rx_connection
         self.tx_host = tx_host
         self.tx_port = tx_port
+        self.tx_connection = tx_connection
         self.sysid = sysid
         self.compid = compid
+        self.target_sysid = target_sysid
+        self.target_compid = target_compid
         
         # Beacon model parameters
         self.beacon_lat = beacon_lat
@@ -292,7 +303,7 @@ class MAVLinkDataHandler:
         self.min_dt = 1.0 / max(0.1, sample_hz)
         
         # State tracking
-        self.last_emit_t = 0.0
+        self.last_sample_t = 0.0
         self.last_sent_lat = None  # Track last sent position for distance check
         self.last_sent_lon = None
         self.mission_active = False
@@ -305,7 +316,7 @@ class MAVLinkDataHandler:
         # MAVLink connections (initialized in connect())
         self.rx = None
         self.tx = None
-        self.mav = None
+        self._fallback_mav = None
     
     def _add_noise_to_rssi(self, rssi: float) -> float:
         """
@@ -365,19 +376,31 @@ class MAVLinkDataHandler:
         """Establish MAVLink connections."""
         print(f"[RX] Connecting to {self.rx_connection}")
         self.rx = mavutil.mavlink_connection(
-            self.rx_connection, autoreconnect=True, force_mavlink2=True
+            self.rx_connection,
+            autoreconnect=True,
+            force_mavlink2=True,
+            dialect="ardupilotmega"
         )
         
-        print(f"[TX] Connecting to udpout:{self.tx_host}:{self.tx_port}")
-        self.tx = mavutil.mavlink_connection(
-            f"udpout:{self.tx_host}:{self.tx_port}",
-            autoreconnect=False, force_mavlink2=True
-        )
-        
-        # Setup MAVLink message encoder
-        self.mav = mav2.MAVLink(None)
-        self.mav.srcSystem = self.sysid
-        self.mav.srcComponent = self.compid
+        if self.tx_connection and self.tx_connection == self.rx_connection:
+            self.tx = self.rx
+            print("[INFO] Single-link mode: TX=RX")
+        else:
+            tx_conn_str = self.tx_connection or f"udpout:{self.tx_host}:{self.tx_port}"
+            print(f"[TX] Connecting to {tx_conn_str}")
+            self.tx = mavutil.mavlink_connection(
+                tx_conn_str,
+                autoreconnect=False,
+                force_mavlink2=True,
+                dialect="ardupilotmega"
+            )
+        self.tx.mav.srcSystem = self.sysid
+        self.tx.mav.srcComponent = self.compid
+        print("[INFO] Waiting for FC heartbeat on TX link...")
+        hb = self.tx.wait_heartbeat(timeout=3)
+        if hb is None:
+            raise RuntimeError("No heartbeat on TX link (tcp:127.0.0.1:5760). Is SITL listening on TCP 5760?")
+        print(f"[INFO] TX link sees FC heartbeat from sysid={self.tx.target_system}")
         
         # Setup CSV logging if requested
         if self.csv_file:
@@ -386,7 +409,7 @@ class MAVLinkDataHandler:
             self.csv_writer.writerow(["timestamp", "latitude", "longitude", "rssi", "distance_m"])
             print(f"[LOG] Writing to {self.csv_file}")
         
-        # Send initial heartbeats to establish presence in QGC
+        # Send initial heartbeats so the flight controller recognizes this companion
         print("[INFO] Sending initial heartbeats...")
         for _ in range(3):
             self._send_heartbeat()
@@ -395,35 +418,107 @@ class MAVLinkDataHandler:
         print("[INFO] Waiting for vehicle heartbeat...")
         self.rx.wait_heartbeat()
         print(f"[INFO] Heartbeat received from system {self.rx.target_system}")
+        
+        tgt_sys = self.rx.target_system or self.target_sysid or 1
+        tgt_comp = self.rx.target_component or self.target_compid or 1
+        hz = max(1.0, float(self.sample_hz))
+        self._request_position_streams(tgt_sys, tgt_comp, hz)
+        self._configure_sr0_rates(tgt_sys, tgt_comp)
+
+    def _request_position_streams(self, tgt_sys: int, tgt_comp: int, hz: float) -> None:
+        """Ask the flight controller to emit GLOBAL_POSITION_INT at the desired rate."""
+        interval_us = int(1_000_000 / hz)
+        try:
+            self.tx.mav.command_long_send(
+                tgt_sys,
+                tgt_comp,
+                mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL,
+                0,
+                mavutil.mavlink.MAVLINK_MSG_ID_GLOBAL_POSITION_INT,
+                interval_us,
+                0,
+                0,
+                0,
+                0,
+                0
+            )
+            print(f"[REQ] GLOBAL_POSITION_INT via COMMAND_LONG @ {hz:.2f} Hz")
+        except Exception as err:
+            print(f"[WARN] command_long MAV_CMD_SET_MESSAGE_INTERVAL failed: {err}")
+        try:
+            self.tx.mav.request_data_stream_send(
+                tgt_sys,
+                tgt_comp,
+                mavutil.mavlink.MAV_DATA_STREAM_POSITION,
+                int(hz),
+                1
+            )
+            print(f"[REQ] REQUEST_DATA_STREAM POSITION @ {hz:.2f} Hz")
+        except Exception as err:
+            print(f"[WARN] request_data_stream_send failed: {err}")
+
+    def _configure_sr0_rates(self, tgt_sys: int, tgt_comp: int) -> None:
+        """Force useful SR0_* stream rates on the primary telemetry port."""
+        for name, value, ptype in (
+            ("SR0_POSITION", 5, mavutil.mavlink.MAV_PARAM_TYPE_INT8),
+            ("SR0_EXT_STAT", 1, mavutil.mavlink.MAV_PARAM_TYPE_INT8),
+            ("SR0_EXTRA1", 5, mavutil.mavlink.MAV_PARAM_TYPE_INT8),
+        ):
+            try:
+                self.tx.mav.param_set_send(tgt_sys, tgt_comp, name.encode("ascii"), float(value), ptype)
+                print(f"[REQ] PARAM_SET {name} = {value}")
+            except Exception as err:
+                print(f"[WARN] PARAM_SET {name} failed: {err}")
     
     def _send_heartbeat(self):
         """Send heartbeat to keep connection alive."""
-        if self.mav and self.tx:
-            hb = self.mav.heartbeat_encode(
+        if self.tx:
+            self.tx.mav.heartbeat_send(
                 mavutil.mavlink.MAV_TYPE_ONBOARD_CONTROLLER,
                 mavutil.mavlink.MAV_AUTOPILOT_INVALID,
-                0, 0, 0
+                0,
+                0,
+                0
             )
-            self.tx.mav.send(hb)
             # Uncomment for debugging: print("[HB] Heartbeat sent")
     
     def _send_tunnel_message(self, lat: float, lon: float, rssi: float, msg_type: int = TYPE_RSSI_GLOBAL):
         """Send a tunnel message with lat/lon/rssi data."""
-        if self.mav and self.tx:
-            payload = pack_triplet(lat, lon, rssi)
-            tmsg = self.mav.tunnel_encode(
-                target_system=0,
-                target_component=0,
+        tx_conn = self.tx
+        if not tx_conn:
+            return
+        payload = pack_triplet(lat, lon, rssi)
+        tx_mav = tx_conn.mav
+        if hasattr(tx_mav, "tunnel_send"):
+            tx_mav.tunnel_send(
+                self.target_sysid,
+                self.target_compid,
+                msg_type,
+                PAYLOAD_LEN,
+                payload
+            )
+        else:
+            if self._fallback_mav is None:
+                encoder = mav2.MAVLink(None)
+                encoder.srcSystem = self.sysid
+                encoder.srcComponent = self.compid
+                self._fallback_mav = encoder
+            msg = self._fallback_mav.tunnel_encode(
+                target_system=self.target_sysid,
+                target_component=self.target_compid,
                 payload_type=msg_type,
                 payload_length=PAYLOAD_LEN,
                 payload=payload
             )
-            self.tx.mav.send(tmsg)
-            type_name = "HEATMAP" if msg_type == TYPE_RSSI_GLOBAL else "MARKER"
-            print(f"[TX] TUNNEL type={msg_type} ({type_name}) lat={lat:.6f} lon={lon:.6f} rssi={rssi:.1f}")
+            tx_mav.send(msg)
+        type_name = "HEATMAP" if msg_type == TYPE_RSSI_GLOBAL else "MARKER"
+        print(f"[TX] TUNNEL type={msg_type} ({type_name}) lat={lat:.6f} lon={lon:.6f} rssi={rssi:.1f}")
     
     def send_victim_marker(self):
         """Send final victim marker using weighted average of strongest signals."""
+        if len(self.collection) < 5:
+            print("[MARKER] Not enough valid samples; skipping marker")
+            return
         victim_loc = self._calculate_victim_location()
         if victim_loc:
             lat, lon, avg_rssi = victim_loc
@@ -442,63 +537,65 @@ class MAVLinkDataHandler:
     
     def _process_position(self, lat: float, lon: float, now: float):
         """Process a position update, calculate RSSI, store, and send tunnel message."""
-        # Rate limiting (1 sample per second)
-        if (now - self.last_emit_t) < self.min_dt:
+        # Rate limiting
+        if self.last_sample_t and (now - self.last_sample_t) < self.min_dt:
+            return
+        self.last_sample_t = now
+        
+        # Ignore invalid positions (e.g., (0,0))
+        if abs(lat) < 1e-6 and abs(lon) < 1e-6:
             return
         
         # Calculate RSSI based on distance from beacon
-        distance = haversine_m(lat, lon, self.beacon_lat, self.beacon_lon)
-        rssi_base = gaussian_rssi(distance, self.peak_rssi, self.floor_rssi, self.sigma_m)
-        rssi = self._add_noise_to_rssi(rssi_base)
+        hav = haversine_m
+        gauss = gaussian_rssi
+        add_noise = self._add_noise_to_rssi
+        send_tunnel = self._send_tunnel_message
+        beacon_lat = self.beacon_lat
+        beacon_lon = self.beacon_lon
+        distance = hav(lat, lon, beacon_lat, beacon_lon)
+        rssi_base = gauss(distance, self.peak_rssi, self.floor_rssi, self.sigma_m)
+        rssi = add_noise(rssi_base)
         
-        # ALWAYS store in collection (every sample)
+        # Store in collection
         self.collection.add(lat, lon, rssi)
         
         # Log to CSV
         if self.csv_writer:
             self.csv_writer.writerow([now, lat, lon, rssi, distance])
         
-        # Check if we should send tunnel message (maintain consistent min_dist_m spacing)
         if self.last_sent_lat is None or self.last_sent_lon is None:
-            # First sample - always send
-            self._send_tunnel_message(lat, lon, rssi, TYPE_RSSI_GLOBAL)
+            send_tunnel(lat, lon, rssi, TYPE_RSSI_GLOBAL)
             self.last_sent_lat = lat
             self.last_sent_lon = lon
             print(f"[DATA] Stored & sent (first): dist={distance:.1f}m from beacon (total: {len(self.collection)})")
         else:
-            # Check distance from last sent position
-            dist_from_last = haversine_m(lat, lon, self.last_sent_lat, self.last_sent_lon)
-            
+            last_lat = self.last_sent_lat
+            last_lon = self.last_sent_lon
+            dist_from_last = hav(lat, lon, last_lat, last_lon)
             if dist_from_last >= self.min_dist_m:
-                # Moved enough to send
-                # If we moved much more than min_dist_m in one step, send multiple interpolated points
                 num_points = int(dist_from_last / self.min_dist_m)
-                
                 if num_points > 1:
-                    # Interpolate intermediate points to maintain consistent spacing
                     for i in range(1, num_points + 1):
                         fraction = (i * self.min_dist_m) / dist_from_last
-                        interp_lat = self.last_sent_lat + (lat - self.last_sent_lat) * fraction
-                        interp_lon = self.last_sent_lon + (lon - self.last_sent_lon) * fraction
-                        interp_dist = haversine_m(interp_lat, interp_lon, self.beacon_lat, self.beacon_lon)
-                        interp_rssi_base = gaussian_rssi(interp_dist, self.peak_rssi, self.floor_rssi, self.sigma_m)
-                        interp_rssi = self._add_noise_to_rssi(interp_rssi_base)
-                        
-                        self._send_tunnel_message(interp_lat, interp_lon, interp_rssi, TYPE_RSSI_GLOBAL)
+                        interp_lat = last_lat + (lat - last_lat) * fraction
+                        interp_lon = last_lon + (lon - last_lon) * fraction
+                        interp_dist = hav(interp_lat, interp_lon, beacon_lat, beacon_lon)
+                        interp_rssi_base = gauss(interp_dist, self.peak_rssi, self.floor_rssi, self.sigma_m)
+                        interp_rssi = add_noise(interp_rssi_base)
+                        send_tunnel(interp_lat, interp_lon, interp_rssi, TYPE_RSSI_GLOBAL)
                         self.last_sent_lat = interp_lat
                         self.last_sent_lon = interp_lon
-                    
+                        last_lat = interp_lat
+                        last_lon = interp_lon
                     print(f"[DATA] Stored & sent {num_points} interpolated points: moved {dist_from_last:.1f}m (total: {len(self.collection)})")
                 else:
-                    # Normal case: just send current position
-                    self._send_tunnel_message(lat, lon, rssi, TYPE_RSSI_GLOBAL)
+                    send_tunnel(lat, lon, rssi, TYPE_RSSI_GLOBAL)
                     self.last_sent_lat = lat
                     self.last_sent_lon = lon
                     print(f"[DATA] Stored & sent: dist={distance:.1f}m from beacon (total: {len(self.collection)})")
             else:
                 print(f"[DATA] Stored only: dist={distance:.1f}m from beacon (total: {len(self.collection)}, moved {dist_from_last:.1f}m < {self.min_dist_m:.1f}m)")
-        
-        self.last_emit_t = now
     
     def run(self):
         """Main loop: receive location data, store points, send tunnel messages."""
@@ -532,6 +629,8 @@ class MAVLinkDataHandler:
                 if msg_type == "GLOBAL_POSITION_INT":
                     lat = msg.lat / 1e7
                     lon = msg.lon / 1e7
+                    if abs(lat) < 1e-6 and abs(lon) < 1e-6:
+                        continue
                     self._process_position(lat, lon, now)
                 
                 elif msg_type == "MISSION_ITEM_REACHED":
@@ -560,20 +659,26 @@ class MAVLinkDataHandler:
 def main():
     """Main entry point with argument parsing."""
     parser = argparse.ArgumentParser(
-        description="457 kHz Avalanche Beacon Simulator - Receive location data from SITL, calculate synthetic RSSI, send tunnel messages to QGC"
+        description="457 kHz Avalanche Beacon Simulator - Receive location data from SITL, calculate synthetic RSSI, send tunnel messages to the flight controller"
     )
     
     # Connection parameters
     parser.add_argument("--rx", default="udpin:0.0.0.0:14557",
-                       help="Telemetry RX connection string (default: udpin:0.0.0.0:14557)")
-    parser.add_argument("--tx-host", default="172.21.192.1",
-                       help="TX host for QGC (default: 172.21.192.1)")
+                       help="Telemetry RX connection string (default: udpin:0.0.0.0:14557).")
+    parser.add_argument("--tx-host", default="127.0.0.1",
+                       help="Flight controller host for tunnel messages (default: 127.0.0.1)")
     parser.add_argument("--tx-port", type=int, default=14550,
-                       help="TX UDP port for QGC (default: 14550)")
-    parser.add_argument("--sysid", type=int, default=255,
-                       help="MAVLink system ID (default: 255)")
-    parser.add_argument("--compid", type=int, default=0,
-                       help="MAVLink component ID (default: 0)")
+                       help="Flight controller UDP port for tunnel messages (default: 14550)")
+    parser.add_argument("--tx-connection", type=str, default=None,
+                       help="Explicit MAVLink connection string for transmissions (e.g. tcp:127.0.0.1:5760). Overrides --tx-host/--tx-port.")
+    parser.add_argument("--sysid", type=int, default=200,
+                       help="Companion MAVLink system ID (default: 200 to avoid conflicts)")
+    parser.add_argument("--compid", type=int, default=mavutil.mavlink.MAV_COMP_ID_ONBOARD_COMPUTER,
+                       help="Companion MAVLink component ID (default: MAV_COMP_ID_ONBOARD_COMPUTER)")
+    parser.add_argument("--target-sysid", type=int, default=0,
+                       help="Target MAVLink system ID for tunnel messages (default: 0 for broadcast)")
+    parser.add_argument("--target-compid", type=int, default=0,
+                       help="Target MAVLink component ID for tunnel messages (default: 0 for broadcast)")
     
     # Beacon model parameters (457 kHz avalanche beacon)
     parser.add_argument("--beacon-lat", type=float, required=True,
@@ -606,8 +711,11 @@ def main():
         rx_connection=args.rx,
         tx_host=args.tx_host,
         tx_port=args.tx_port,
+        tx_connection=args.tx_connection,
         sysid=args.sysid,
         compid=args.compid,
+        target_sysid=args.target_sysid,
+        target_compid=args.target_compid,
         beacon_lat=args.beacon_lat,
         beacon_lon=args.beacon_lon,
         peak_rssi=args.peak,
