@@ -24,8 +24,10 @@ params.wifi_channel = 11
 params.beacon_period = 1.0
 
 params.log_directory = "/home/kali/logs/"
+params.serial_baud = 115200
 
 params.save(savefile)
+
 
 # test by reloding from file
 params = DaemonParams(savefile)

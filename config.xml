@@ -9,4 +9,5 @@
 	<wifi_channel>11</wifi_channel>
 	<beacon_period>1.0</beacon_period>
 	<log_directory>/home/kali/logs/</log_directory>
+	<serial_baud>115200</serial_baud>
 </DaemonParams>
