@@ -8,18 +8,18 @@ from typing import Callable
 from time import time
 from threading import Thread
 
-def pack_triplet(lat: float, lon: float, rssi: float) -> bytes:
-    """
-    Pack lat/lon/rssi into tunnel payload format (12 bytes data + padding).
-    """
-    body = struct.pack("<fff", float(lat), float(lon), float(rssi))
-    return body + bytes(PAYLOAD_BUF - len(body))
 
 # MAVLink TUNNEL constants
 PAYLOAD_LEN = 12
 PAYLOAD_BUF = 128
 TYPE_RSSI_GLOBAL = 4  # Tunnel type for lat/lon/rssi heatmap data
 TYPE_VICTIM_MARKER = 2  # Tunnel type for final victim marker
+
+
+def pack_triplet(lat: float, lon: float, rssi: float) -> bytes:
+    """Pack lat/lon/rssi into tunnel payload format (12 bytes data + padding)."""
+    body = struct.pack("<fff", float(lat), float(lon), float(rssi))
+    return body + bytes(PAYLOAD_BUF - len(body))
 
 class MavlinkConnectionManager: 
     '''
@@ -53,6 +53,7 @@ class MavlinkConnectionManager:
         '''
 
         self.__mission_active = False
+        self.__time_last_heartbeat_sent = 0.0
 
         self._mav_conn = mavutil.mavlink_connection(
                 mav_str, 
@@ -138,7 +139,7 @@ class MavlinkConnectionManager:
                 )
 
         while True: 
-            # send hearbeat
+            # send heartbeat
             if time() - self.__time_last_heartbeat_sent >= self.__heartbeat_period: 
                 self.__send_heartbeat()
             

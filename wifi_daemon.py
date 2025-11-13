@@ -106,7 +106,7 @@ class DaemonParams:
 
     def __init__(self, filename: Optional[str]) -> None:
         '''
-        Contructor. 
+        Constructor. 
         Load from a file if given.
 
         args: 
@@ -118,8 +118,16 @@ class DaemonParams:
         with open(filename, "r") as f: 
             d = parse(f.read())
 
-        for key, value in d.items():
-            setattr(self, key, value)
+        if "DaemonParams" in d:
+            params_dict = d["DaemonParams"]
+            for key, value in params_dict.items():
+                # Convert string values to appropriate types
+                if key in ["drone_system_id", "drone_component_id", "raspberry_pi_component_id", 
+                          "base_station_system_id", "wifi_channel", "serial_baud"]:
+                    value = int(value)
+                elif key == "beacon_period":
+                    value = float(value)
+                setattr(self, key, value)
 
     def save(self, filename: str) -> None: 
         '''

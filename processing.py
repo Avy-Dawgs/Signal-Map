@@ -3,7 +3,7 @@ For data processing.
 '''
 from numpy import interp, array, argmax
 from DataPoint import DataPoint
-from shared_types import RssiTime
+from shared_types import RssiTime, LocationTime
 
 
 def location_interpolate(
