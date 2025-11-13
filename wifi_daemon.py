@@ -58,7 +58,8 @@ def main(argv: list[str]):
             params.mavlink_connection_string, 
             params.drone_system_id, 
             params.raspberry_pi_component_id, 
-            params.base_station_system_id
+            params.base_station_system_id, 
+            params.serial_baud
             )
     mavlink_telemetry = MavlinkTelemetryMonitor(
             mavlink_manager
@@ -100,6 +101,8 @@ class DaemonParams:
     beacon_period: float 
 
     log_directory: str
+
+    serial_baud: int
 
     def __init__(self, filename: Optional[str]) -> None:
         '''

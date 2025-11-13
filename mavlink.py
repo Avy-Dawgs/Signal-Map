@@ -45,6 +45,7 @@ class MavlinkConnectionManager:
             drone_system_id: int, 
             raspberrypi_component_id: int,
             base_station_system_id: int,
+            baud: int
             ) -> None: 
         '''
         Constructor. 
@@ -58,6 +59,7 @@ class MavlinkConnectionManager:
                 source_system=drone_system_id, 
                 source_component=raspberrypi_component_id,
                 dialect="ardupilotmegav", 
+                baud=baud
             )
 
         # encoder
