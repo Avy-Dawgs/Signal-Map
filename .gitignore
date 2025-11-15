@@ -1,1 +1,6 @@
 __pycache__
+*.bin
+*.tlog
+*.parm
+*.raw
+*.DAT
