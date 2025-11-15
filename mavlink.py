@@ -4,9 +4,10 @@ For communicating with the drone/base station over MavLink.
 from pymavlink import mavutil
 import struct
 from pymavlink.dialects.v20 import ardupilotmega as dialect
-from typing import Callable
+from typing import Callable, Optional
 from time import time
 from threading import Thread
+import logging
 
 
 # MAVLink TUNNEL constants
@@ -28,10 +29,11 @@ class MavlinkConnectionManager:
     '''
     _mav_conn: mavutil.mavfile
     new_position_cb: Callable[[float, float, float], None]
-    mission_started_cb: Callable[[], None]
-    mission_ended_cb: Callable[[], None]
+    mission_started_cb: Optional[Callable[[], None]]
+    mission_ended_cb: Optional[Callable[[], None]]
     _base_station_system_id: int
     _drone_system_id: int 
+    _flight_controller_component_id: int
     _raspberrypi_component_id: int
     _enc: dialect.MAVLink
     __telemetry_thread: Thread
@@ -43,6 +45,7 @@ class MavlinkConnectionManager:
             self, 
             mav_str: str,
             drone_system_id: int, 
+            flight_controller_component_id: int,
             raspberrypi_component_id: int,
             base_station_system_id: int,
             baud: int
@@ -51,6 +54,9 @@ class MavlinkConnectionManager:
         Constructor. 
         Starts monitoring.
         '''
+
+        self.mission_ended_cb = None 
+        self.mission_started_cb = None
 
         self.__mission_active = False
         self.__time_last_heartbeat_sent = 0.0
@@ -74,6 +80,7 @@ class MavlinkConnectionManager:
         #   - 1 seconds mission done
         # TODO handle heartbeats somehow (probably send and receive)
         self._drone_system_id = drone_system_id 
+        self._flight_controller_component_id = flight_controller_component_id
         self._raspberrypi_component_id = raspberrypi_component_id
         self._base_station_system_id = base_station_system_id
 
@@ -110,10 +117,19 @@ class MavlinkConnectionManager:
             msg_id: id of message to set interval for 
             interval: message interval given as in seconds
         '''
-        self._mav_conn.mav.message_interval_send(
-                msg_id,         # message id 
-                int(interval*1e6)  # interval 
-                )
+        self._mav_conn.mav.command_long_send(
+            self._drone_system_id,  # target sys
+            self._flight_controller_component_id,  # target comp
+            mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL,
+            0,
+            msg_id,
+            int(interval*1e6),
+            0,
+            0,
+            0,
+            0,
+            0
+        )
 
     def __telemetry_loop(
             self

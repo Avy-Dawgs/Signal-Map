@@ -5,6 +5,7 @@ from typing import Optional
 from sys import argv
 from xmltodict import parse, unparse
 from xml.dom.minidom import parseString
+import logging
 
 from mavlink import MavlinkConnectionManager, MavlinkTelemetryMonitor
 from control import Control
@@ -50,6 +51,8 @@ def main(argv: list[str]):
         print("Please provide the parameter file as the only argument.")
         return
 
+    logging.basicConfig(handlers=[logging.StreamHandler(), logging.FileHandler("wifi_daemon.log")], level=logging.DEBUG)
+
     # load params 
     params = DaemonParams(argv[1])
 
@@ -57,6 +60,7 @@ def main(argv: list[str]):
     mavlink_manager = MavlinkConnectionManager(
             params.mavlink_connection_string, 
             params.drone_system_id, 
+            params.flight_controller_component_id,
             params.raspberry_pi_component_id, 
             params.base_station_system_id, 
             params.serial_baud
@@ -91,7 +95,7 @@ class DaemonParams:
     '''
     mavlink_connection_string: str 
     drone_system_id: int
-    drone_component_id: int
+    flight_controller_component_id: int
     raspberry_pi_component_id: int
     base_station_system_id: int
 
@@ -122,7 +126,7 @@ class DaemonParams:
             params_dict = d["DaemonParams"]
             for key, value in params_dict.items():
                 # Convert string values to appropriate types
-                if key in ["drone_system_id", "drone_component_id", "raspberry_pi_component_id", 
+                if key in ["drone_system_id", "flight_controller_component_id", "raspberry_pi_component_id", 
                           "base_station_system_id", "wifi_channel", "serial_baud"]:
                     value = int(value)
                 elif key == "beacon_period":

@@ -10,6 +10,7 @@ from time import sleep, time
 from os import makedirs, path
 from datetime import datetime
 import struct
+import logging
 
 class Control: 
     '''
@@ -176,7 +177,7 @@ class Control:
         Runs during the main mission.
         Interpolates location, creates data points, sends tunnel messages, and logs data.
         '''
-        rssi_check_window = 0.2  # seconds: short window to detect new pulses
+        rssi_check_window = 1  # seconds: short window to detect new pulses
         
         while True:
             # check for end of mission.
@@ -237,7 +238,7 @@ class Control:
                         pass
             
             # Small sleep to prevent waiting while still being responsive to pulses
-            sleep(0.1) 
+            sleep(rssi_check_window) 
 
 
     def __mission_deinit(

@@ -9,6 +9,7 @@ from subprocess import call
 from time import time
 from numpy import argmax, array
 from shared_types import RssiTime
+import logging
 
 
 class WifiInterface:
@@ -52,18 +53,19 @@ class WifiInterface:
             kill_processes: kill conflicting processes
         '''
         if kill_processes:
+            logging.info("Killing processes that conflict with monitor mode.")
             call(["airmon-ng", "check", "kill"]) 
 
         if not self._card_name.endswith("mon"):
-            print("Starting monitor mode.")
+            logging.info("Starting monitor mode.")
 
             # this is the best way i've found to enter monitor mode
             call(["airmon-ng", "start", self._card_name])
             self._card_name += "mon"
             self.__card = pyw.getcard(self._card_name)
-            print("Monitor mode started.")
+            logging.info("Monitor mode started.")
         else: 
-            print("Monitor mode already started.")
+            logging.info("Monitor mode was already started.")
 
     def stop_monitor_mode(
             self, 
@@ -75,11 +77,12 @@ class WifiInterface:
         args: 
             start_network_manager: start network manager (to reconnect to networks)
         '''
-        print("Stopping monitor mode.")
+        logging.info("Stopping monitor mode.")
         call(["airmon-ng", "stop", self._card_name])
-        print("Monitor mode stopped.")
+        logging.info("Monitor mode stopped.")
 
         if start_network_manager:
+            logging.info("Staring NetworkManager.")
             call(["systemctl", "start", "NetworkManager"])
 
     def set_channel(
@@ -91,7 +94,7 @@ class WifiInterface:
         '''
         pyw.chset(self.__card, channel)
         self._channel = channel
-        print(f"WiFi channel set to {channel}.")
+        logging.info(f"WiFi channel set to {channel}.")
 
 
 class WifiRssiMonitor: 
@@ -120,7 +123,7 @@ class WifiRssiMonitor:
         self._time_list = []
         self._seconds_of_data = 2
 
-        print("Starting packet capture.")
+        logging.info("Staring packet capture.")
         self.__monitor_thread = Thread(target=self.__monitor, daemon=True)
         self.__monitor_thread.start()
 
@@ -178,6 +181,7 @@ class WifiRssiMonitor:
         last_sec_rssi = self._rssi_list[len(self._rssi_list) - len(last_sec_times) :]
 
         if len(last_sec_rssi) == 0: 
+            logging.info(f"No rssi data for last {n} seconds")
             return None
 
         idx = argmax(array(last_sec_rssi))
