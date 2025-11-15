@@ -157,7 +157,7 @@ class Control:
         
         # Open log files in write mode
         self._message_file = open(f"{self._mission_dir}/messages.log", "w")
-        self._data_file = open(f"{self._mission_dir}/signal_map.dat", "wb")
+        self._data_file = open(f"{self._mission_dir}/signal_map.dat", "w")
         self._victim_file = open(f"{self._mission_dir}/victim.txt", "w")
         
         # Clear collection for new mission
@@ -217,7 +217,7 @@ class Control:
                             
                             # Write to data file (binary format: lat, lon, rssi as floats)
                             data_bytes = struct.pack('<fff', point.latitude, point.longitude, point.rssi)
-                            self._data_file.write(data_bytes)
+                            self._data_file.write(str(data_bytes))
                             self._data_file.flush()
                             
                             # Log message
