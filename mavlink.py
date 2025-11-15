@@ -59,7 +59,6 @@ class MavlinkConnectionManager:
                 mav_str, 
                 source_system=drone_system_id, 
                 source_component=raspberrypi_component_id,
-                dialect="ardupilotmegav", 
                 baud=baud
             )
 
@@ -111,11 +110,9 @@ class MavlinkConnectionManager:
             msg_id: id of message to set interval for 
             interval: message interval given as in seconds
         '''
-        self._mav_conn.mav.mav_cmd_set_message_interval(
+        self._mav_conn.mav.message_interval_send(
                 msg_id,         # message id 
-                interval*1e-6,  # interval 
-                0, 0, 0, 0,     # req params 3 - 6 (unused)
-                0,              # response target   (0 for flight stack)
+                int(interval*1e6)  # interval 
                 )
 
     def __telemetry_loop(
