@@ -162,6 +162,10 @@ class MavlinkConnectionManager:
         '''
         Handles a heartbeat messae.
         '''
+        # reject messages that don't come from the drone's flight controller
+        if msg.get_srcSystem() != self._drone_system_id:
+            return
+
         # mision is active, evaulate a transition to inactive
         if self.__mission_active: 
             if msg.custom_mode != dialect.COPTER_MODE_AUTO: 
