@@ -5,13 +5,30 @@ from threading import Thread
 from typing import Optional
 from pyric import pyw 
 from scapy.all import Packet, sniff
-from scapy.layers.dot11 import RadioTap
+from scapy.layers.dot11 import Dot11ProbeResp, RadioTap, Dot11Beacon
 from subprocess import call
-from time import time
+from time import time, sleep
 from numpy import argmax, array
 from shared_types import RssiTime
 import logging
 
+def freq_to_ch(
+        freq_mhz: int
+        ) -> Optional[int]: 
+    '''
+    Convert a frequency to a wifi channel.
+    '''
+    if freq_mhz < 2401 or freq_mhz > 2495: 
+        return None
+    if freq_mhz > 2477:
+        return 14
+
+    offset = freq_mhz - 2412
+    ch = int(float(offset)/5.0) + 1
+
+    if ch < 1: 
+        ch = 1
+    return ch
 
 class WifiInterface:
     '''
@@ -95,7 +112,6 @@ class WifiInterface:
         '''
         pyw.chset(self.__card, channel)
         self._channel = channel
-        logging.info(f"WiFi channel set to {channel}.")
 
 
 class WifiRssiMonitor: 
@@ -105,28 +121,66 @@ class WifiRssiMonitor:
     __wifi: WifiInterface
     _rssi_list: list[float]
     _time_list: list[float]
+    _channel_list: list[int]
     __monitor_thread: Thread
     _seconds_of_data: int
+    _ssid: str
 
     def __init__(
             self, 
             wifi: WifiInterface, 
-            ch: int, 
+            ssid: str,
             kill_processes: bool,
             ) -> None: 
         '''
         Contructor. Starts monitor on given channel.
         '''
+        self._ssid = ssid
         self.__wifi = wifi
         self.__wifi.start_monitor_mode(kill_processes)
-        self.__wifi.set_channel(ch)
+
+        # start on channel 1
+        self.__wifi.set_channel(1)
+        self._channel_list = []
         self._rssi_list = []
         self._time_list = []
         self._seconds_of_data = 2
 
-        logging.info("Staring packet capture.")
+        logging.info("Starting packet capture.")
         self.__monitor_thread = Thread(target=self.__monitor, daemon=True)
         self.__monitor_thread.start()
+
+        logging.info("Starting channel hopping.")
+        self.__channel_hop_thread = Thread(target=self.__channel_hop, daemon=True)
+        self.__channel_hop_thread.start()
+
+    def __channel_hop(
+            self
+            ) -> None: 
+        '''
+        Run as background thread to channel hop.
+        Runs until it finds a beacon, then sticks on that channel
+        '''
+        beacon_found = False
+        current_ch = self.__wifi._channel
+        while True:
+            sleep(1)
+            if current_ch in self._channel_list:
+                beacon_found = True
+
+            self._channel_list.clear()
+
+            if beacon_found: 
+                logging.info(f"beacon identified on channel {current_ch}")
+                break
+            else: 
+                if current_ch == 13:
+                    logging.warning("full channel scan complete with no beacons found")
+                    current_ch = 1
+                else: 
+                    current_ch = current_ch + 1
+                self.__wifi.set_channel(current_ch)
+                logging.info(f"Channel set to {current_ch}")
 
     def __monitor(
             self
@@ -144,11 +198,19 @@ class WifiRssiMonitor:
         Handle a packet.
         '''
         try: 
+            ssid = pkt.info.decode()
+            if ssid != self._ssid:
+                return
             radiotap = pkt.getlayer(RadioTap)
             if radiotap:
                 rssi = float(radiotap.dBm_AntSignal)
+                time = float(pkt.time)
                 self._rssi_list.append(rssi) 
-                self._time_list.append(float(pkt.time))
+                self._time_list.append(time)
+
+                ch = freq_to_ch(int(radiotap.ChannelFrequency))
+                if ch:
+                    self._channel_list.append(ch)
         except AttributeError: 
             pass
 

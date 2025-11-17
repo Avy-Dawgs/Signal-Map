@@ -1,12 +1,15 @@
 from wifi_rssi import *
 from time import sleep
+import logging
 
 def main(): 
     card_name = "wlp0s20f3"
-    ch = 11
+    ssid = "beacon"
+
+    logging.basicConfig(handlers=[logging.StreamHandler()], level=logging.DEBUG)
 
     interface = WifiInterface(card_name)
-    monitor = WifiRssiMonitor(interface, ch, True)
+    monitor = WifiRssiMonitor(interface, ssid, True)
 
     period = 1
     try:
