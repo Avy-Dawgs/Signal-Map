@@ -6,7 +6,7 @@ def main():
     ch = 11
 
     interface = WifiInterface(card_name)
-    monitor = WifiRssiMonitor(interface, ch)
+    monitor = WifiRssiMonitor(interface, ch, True)
 
     period = 1
     try:

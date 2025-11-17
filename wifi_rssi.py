@@ -4,7 +4,8 @@ For the monitoring of WiFi RSSI.
 from threading import Thread
 from typing import Optional
 from pyric import pyw 
-from scapy.all import sniff, RadioTap
+from scapy.all import Packet, sniff
+from scapy.layers.dot11 import RadioTap
 from subprocess import call
 from time import time
 from numpy import argmax, array
@@ -137,16 +138,17 @@ class WifiRssiMonitor:
 
     def __handle_packet(
             self, 
-            pkt
+            pkt: Packet
             ) -> None: 
         '''
         Handle a packet.
         '''
-        current_time = time() 
         try: 
-            rssi = float(pkt.getlayer(RadioTap).dBm_AntSignal)
-            self._rssi_list.append(rssi) 
-            self._time_list.append(current_time)
+            radiotap = pkt.getlayer(RadioTap)
+            if radiotap:
+                rssi = float(radiotap.dBm_AntSignal)
+                self._rssi_list.append(rssi) 
+                self._time_list.append(float(pkt.time))
         except AttributeError: 
             pass
 
@@ -193,5 +195,5 @@ class WifiRssiMonitor:
         '''
         Stop monitoring.
         '''
-        print("Stoping packet capture.") 
+        logging.info("Stopping packet capture.") 
         self.__wifi.stop_monitor_mode(False)
