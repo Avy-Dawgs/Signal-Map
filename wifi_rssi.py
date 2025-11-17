@@ -161,14 +161,14 @@ class WifiRssiMonitor:
         Run as background thread to channel hop.
         Runs until it finds a beacon, then sticks on that channel
         '''
+        
         beacon_found = False
         current_ch = self.__wifi._channel
         while True:
-            sleep(1)
+            self._channel_list.clear()
+            sleep(0.2)
             if current_ch in self._channel_list:
                 beacon_found = True
-
-            self._channel_list.clear()
 
             if beacon_found: 
                 logging.info(f"beacon identified on channel {current_ch}")
@@ -202,13 +202,14 @@ class WifiRssiMonitor:
             if ssid != self._ssid:
                 return
             radiotap = pkt.getlayer(RadioTap)
-            if radiotap:
+            dot11beacon = pkt.getlayer(Dot11Beacon)
+            if radiotap and dot11beacon:
                 rssi = float(radiotap.dBm_AntSignal)
                 time = float(pkt.time)
                 self._rssi_list.append(rssi) 
                 self._time_list.append(time)
 
-                ch = freq_to_ch(int(radiotap.ChannelFrequency))
+                ch = dot11beacon.network_stats().get("channel")
                 if ch:
                     self._channel_list.append(ch)
         except AttributeError: 
