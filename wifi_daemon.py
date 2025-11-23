@@ -73,7 +73,7 @@ def main(argv: list[str]):
     wifi_interface = WifiInterface(params.wifi_card_name)
     wifi_rssi_monitor = WifiRssiMonitor(
             wifi_interface, 
-            params.wifi_channel, 
+            params.beacon_ssid,
             True        # kill processes
             )
 
@@ -100,9 +100,9 @@ class DaemonParams:
     base_station_system_id: int
 
     wifi_card_name: str 
-    wifi_channel: int
 
     beacon_period: float 
+    beacon_ssid: str
 
     log_directory: str
 
@@ -127,7 +127,7 @@ class DaemonParams:
             for key, value in params_dict.items():
                 # Convert string values to appropriate types
                 if key in ["drone_system_id", "flight_controller_component_id", "raspberry_pi_component_id", 
-                          "base_station_system_id", "wifi_channel", "serial_baud"]:
+                          "base_station_system_id", "serial_baud"]:
                     value = int(value)
                 elif key == "beacon_period":
                     value = float(value)

@@ -2,6 +2,7 @@
 For communicating with the drone/base station over MavLink.
 '''
 from pymavlink import mavutil
+from enum import Enum
 import struct
 from pymavlink.dialects.v20 import ardupilotmega as dialect
 from typing import Callable, Optional
@@ -22,6 +23,13 @@ def pack_triplet(lat: float, lon: float, rssi: float) -> bytes:
     body = struct.pack("<fff", float(lat), float(lon), float(rssi))
     return body + bytes(PAYLOAD_BUF - len(body))
 
+
+class MissionState(Enum): 
+    INACTIVE = 0 
+    ACTIVE = 1 
+    RETURNING = 2
+
+
 class MavlinkConnectionManager: 
     '''
     Monitors mavlink connection for required telemetry data, 
@@ -37,9 +45,9 @@ class MavlinkConnectionManager:
     _raspberrypi_component_id: int
     _enc: dialect.MAVLink
     __telemetry_thread: Thread
-    __mission_active: bool
     __time_last_heartbeat_sent: float
     __heartbeat_period: float = 1.0     # this could become parameter
+    _mission_state: MissionState
 
     def __init__(
             self, 
@@ -58,7 +66,7 @@ class MavlinkConnectionManager:
         self.mission_ended_cb = None 
         self.mission_started_cb = None
 
-        self.__mission_active = False
+        self._mission_state = MissionState.INACTIVE
         self.__time_last_heartbeat_sent = 0.0
 
         self._mav_conn = mavutil.mavlink_connection(
@@ -151,13 +159,18 @@ class MavlinkConnectionManager:
                 0.25                # a bit slower than the default ardupilot gps update rate of 0.2 (to prevent getting the same reading twice)
                 )
 
+        self.__set_message_interval(
+                mavutil.mavlink.MAVLINK_MSG_ID_MISSION_CURRENT, 
+                1
+                )
+
         while True: 
             # send heartbeat
             if time() - self.__time_last_heartbeat_sent >= self.__heartbeat_period: 
                 self.__send_heartbeat()
             
             msg = self._mav_conn.recv_match(
-                    type=["GLOBAL_POSITION_INT", "HEARTBEAT"], 
+                    type=["GLOBAL_POSITION_INT", "HEARTBEAT", "MISSION_CURRENT"], 
                     blocking=True, 
                     timeout=0.15
                     )
@@ -170,6 +183,37 @@ class MavlinkConnectionManager:
                     self.__global_position_int_handler(msg)
                 case "HEARTBEAT": 
                     self.__heartbeat_handler(msg)
+                case "MISSION_CURRENT":
+                    self.__mission_current_handler(msg)
+
+    def __mission_current_handler(
+            self,
+            msg: dialect.MAVLink_mission_current_message
+            ) -> None: 
+        '''
+        Handles a mission current message.
+        '''
+        if msg.get_srcSystem() != self._drone_system_id:
+            return 
+
+        match self._mission_state: 
+            # transition when mission goes active
+            case MissionState.INACTIVE: 
+                if msg.mission_state == dialect.MISSION_STATE_ACTIVE: 
+                    self._mission_state = MissionState.ACTIVE 
+                    if self.mission_started_cb: 
+                        self.mission_started_cb()
+            # transition when last waypoint reached
+            case MissionState.ACTIVE: 
+                if msg.seq == msg.total:
+                    self._mission_state = MissionState.RETURNING
+                    # prob should rename this cb
+                    if self.mission_ended_cb: 
+                        self.mission_ended_cb()
+            # transiiton when drone lands
+            case MissionState.RETURNING:
+                if msg.mission_state == dialect.MISSION_STATE_COMPLETE: 
+                    self._mission_state = MissionState.INACTIVE
 
     def __heartbeat_handler(
             self, 
@@ -183,17 +227,17 @@ class MavlinkConnectionManager:
             return
 
         # mision is active, evaulate a transition to inactive
-        if self.__mission_active: 
-            if msg.custom_mode != dialect.COPTER_MODE_AUTO: 
-                self.__mission_active = False
-                if self.mission_ended_cb: 
-                    self.mission_ended_cb()
-        # misison is not active, evaulate a transition to active
-        else: 
-            if msg.custom_mode == dialect.COPTER_MODE_AUTO:
-                self.__mission_active = True 
-                if self.mission_started_cb: 
-                    self.mission_started_cb()
+        # if self.__mission_active: 
+        #     if msg.custom_mode != dialect.COPTER_MODE_AUTO: 
+        #         self.__mission_active = False
+        #         if self.mission_ended_cb: 
+        #             self.mission_ended_cb()
+        # # misison is not active, evaulate a transition to active
+        # else: 
+        #     if msg.custom_mode == dialect.COPTER_MODE_AUTO:
+        #         self.__mission_active = True 
+        #         if self.mission_started_cb: 
+        #             self.mission_started_cb()
 
     def __global_position_int_handler(
             self, 

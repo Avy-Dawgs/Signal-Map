@@ -14,14 +14,14 @@ params = DaemonParams(None)
 
 params.mavlink_connection_string = "/dev/ttyS0"
 params.drone_system_id = 1
-params.drone_component_id = 0
+params.flight_controller_component_id = 0
 params.raspberry_pi_component_id = 200 
 params.base_station_system_id = 255
 
 params.wifi_card_name = "wlan0" 
-params.wifi_channel = 11
 
 params.beacon_period = 1.0
+params.beacon_ssid = "beacon"
 
 params.log_directory = "/home/kali/logs/"
 params.serial_baud = 115200
