@@ -24,10 +24,7 @@ def main():
         print("Exiting")
         print(e)
     finally:
-        monitor.stop()
-
-def print_rssi(rssi: float) -> None: 
-    print(rssi)
+        monitor.stop(True)
 
 if __name__ == "__main__": 
     main()
