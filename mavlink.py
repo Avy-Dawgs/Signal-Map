@@ -148,7 +148,7 @@ class MavlinkConnectionManager:
                 )
         self.__set_message_interval(
                 mavutil.mavlink.MAVLINK_MSG_ID_GLOBAL_POSITION_INT, 
-                0.1
+                0.25                # a bit slower than the default ardupilot gps update rate of 0.2 (to prevent getting the same reading twice)
                 )
 
         while True: 
