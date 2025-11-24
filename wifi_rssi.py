@@ -1,7 +1,9 @@
 '''
 For the monitoring of WiFi RSSI.
 '''
-from threading import Thread, current_thread
+from io import TextIOWrapper
+import csv
+from threading import Thread 
 from typing import Optional
 from pyric import pyw 
 from scapy.all import Packet, sniff
@@ -12,23 +14,10 @@ from numpy import argmax, array
 from shared_types import RssiTime
 import logging
 
-def freq_to_ch(
-        freq_mhz: int
-        ) -> Optional[int]: 
-    '''
-    Convert a frequency to a wifi channel.
-    '''
-    if freq_mhz < 2401 or freq_mhz > 2495: 
-        return None
-    if freq_mhz > 2477:
-        return 14
 
-    offset = freq_mhz - 2412
-    ch = int(float(offset)/5.0) + 1
+logger = logging.getLogger(__name__)
+logger.level = logging.INFO
 
-    if ch < 1: 
-        ch = 1
-    return ch
 
 class WifiInterface:
     '''
@@ -71,19 +60,19 @@ class WifiInterface:
             kill_processes: kill conflicting processes
         '''
         if kill_processes:
-            logging.info("Killing processes that conflict with monitor mode.")
+            logger.info("Killing processes that conflict with monitor mode.")
             call(["airmon-ng", "check", "kill"]) 
 
         if not self._card_name.endswith("mon"):
-            logging.info("Starting monitor mode.")
+            logger.info("Starting monitor mode.")
 
             # this is the best way i've found to enter monitor mode
             call(["airmon-ng", "start", self._card_name])
             self._card_name += "mon"
             self.__card = pyw.getcard(self._card_name)
-            logging.info("Monitor mode started.")
+            logger.info("Monitor mode started.")
         else: 
-            logging.info("Monitor mode was already started.")
+            logger.info("Monitor mode was already started.")
 
     def stop_monitor_mode(
             self, 
@@ -95,12 +84,12 @@ class WifiInterface:
         args: 
             start_network_manager: start network manager (to reconnect to networks)
         '''
-        logging.info("Stopping monitor mode.")
+        logger.info("Stopping monitor mode.")
         call(["airmon-ng", "stop", self._card_name])
-        logging.info("Monitor mode stopped.")
+        logger.info("Monitor mode stopped.")
 
         if start_network_manager:
-            logging.info("Staring NetworkManager.")
+            logger.info("Staring NetworkManager.")
             call(["systemctl", "start", "NetworkManager"])
 
     def set_channel(
@@ -146,11 +135,11 @@ class WifiRssiMonitor:
         self._time_list = []
         self._seconds_of_data = 2
 
-        logging.info("Starting packet capture.")
+        logger.info("Starting packet capture.")
         self.__monitor_thread = Thread(target=self.__monitor, daemon=True)
         self.__monitor_thread.start()
 
-        logging.info("Starting channel hopping.")
+        logger.info("Starting channel hopping.")
         self.__channel_hop_thread = Thread(target=self.__channel_hop, daemon=True)
         self.__channel_hop_thread.start()
 
@@ -183,13 +172,13 @@ class WifiRssiMonitor:
                 scan_ch = self.__next_channel(current_ch)
 
             # primary scan 
-            logging.debug(f"Primary scan for next 0.8 seconds on channel {current_ch}")
+            logger.debug(f"Primary scan for next 0.8 seconds on channel {current_ch}")
             self.__wifi.set_channel(current_ch)
             sleep(0.8)
             current_ch_rssi = self._channel_max_rssi_dict.get(current_ch)
 
             # secondary scan
-            logging.debug(f"Secondary scan for next 0.2 seconds on channel {scan_ch}")
+            logger.debug(f"Secondary scan for next 0.2 seconds on channel {scan_ch}")
             self.__wifi.set_channel(scan_ch)
             sleep(0.2) 
             scan_ch_rssi = self._channel_max_rssi_dict.get(scan_ch)
@@ -198,10 +187,10 @@ class WifiRssiMonitor:
             if scan_ch_rssi: 
                 if current_ch_rssi: 
                     if scan_ch_rssi > current_ch_rssi:
-                        logging.info(f"Switching to channel {scan_ch} because RSSI is stronger than on channel {current_ch}")
+                        logger.info(f"Switching to channel {scan_ch} because RSSI is stronger than on channel {current_ch}")
                         current_ch = scan_ch
                 else: 
-                    logging.info(f"Switching to channel {scan_ch} because there was no rssi data on channel {current_ch}")
+                    logger.info(f"Switching to channel {scan_ch} because there was no rssi data on channel {current_ch}")
                     current_ch = scan_ch
         
     def __find_max_rssi_ch(
@@ -233,13 +222,13 @@ class WifiRssiMonitor:
         current_ch = None
         while not current_ch:
             for ch in range(1, 14):
-                logging.debug(f"Scanning channel {ch} for beacon")
+                logger.debug(f"Scanning channel {ch} for beacon")
                 self.__wifi.set_channel(ch)
                 sleep(sleep_time)
 
             current_ch = self.__find_max_rssi_ch()
 
-        logging.info(f"Found strongest beacon on channel {current_ch}")
+        logger.info(f"Found strongest beacon on channel {current_ch}")
         return current_ch
 
     def __monitor(
@@ -278,7 +267,17 @@ class WifiRssiMonitor:
                     else: 
                         self._channel_max_rssi_dict[ch] = rssi
         except AttributeError: 
-            pass
+            logger.debug("AttributeError when handling a packet.")
+
+    def write_to_file(
+            self, 
+            file: TextIOWrapper,
+            ) -> None: 
+        '''
+        Write rssi and time to a csv file.
+        '''
+        w = csv.writer(file)
+        w.writerows(zip(self._rssi_list, self._time_list))
 
     def get_max_rssi(
             self, 
@@ -311,7 +310,7 @@ class WifiRssiMonitor:
         last_sec_rssi = self._rssi_list[len(self._rssi_list) - len(last_sec_times) :]
 
         if len(last_sec_rssi) == 0: 
-            logging.info(f"No rssi data for last {n} seconds")
+            logger.info(f"No rssi data for last {n} seconds")
             return None
 
         idx = argmax(array(last_sec_rssi))
@@ -324,5 +323,5 @@ class WifiRssiMonitor:
         '''
         Stop monitoring.
         '''
-        logging.info("Stopping packet capture.") 
+        logger.info("Stopping packet capture.") 
         self.__wifi.stop_monitor_mode(start_network_manager)

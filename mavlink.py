@@ -1,6 +1,8 @@
 '''
 For communicating with the drone/base station over MavLink.
 '''
+import csv
+from io import TextIOWrapper
 from pymavlink import mavutil
 from enum import Enum
 import struct
@@ -9,6 +11,10 @@ from typing import Callable, Optional
 from time import time
 from threading import Thread
 import logging
+
+
+logger = logging.getLogger(__name__) 
+logger.level = logging.DEBUG
 
 
 # MAVLink TUNNEL constants
@@ -36,7 +42,8 @@ class MavlinkConnectionManager:
     can send tunnel messages.
     '''
     _mav_conn: mavutil.mavfile
-    new_position_cb: Callable[[float, float, float], None]
+    new_global_position_cb: Optional[Callable[[float, float, float], None]]
+    new_local_position_cb: Optional[Callable[[float, float, float], None]]
     mission_started_cb: Optional[Callable[[], None]]
     mission_ended_cb: Optional[Callable[[], None]]
     _base_station_system_id: int
@@ -65,6 +72,8 @@ class MavlinkConnectionManager:
 
         self.mission_ended_cb = None 
         self.mission_started_cb = None
+        self.new_global_position_cb = None 
+        self.new_local_position_cb = None
 
         self._mission_state = MissionState.INACTIVE
         self.__time_last_heartbeat_sent = 0.0
@@ -83,10 +92,6 @@ class MavlinkConnectionManager:
                 raspberrypi_component_id
                 )
 
-        # TODO setup message intervals
-        #   - 0.1 seconds location 
-        #   - 1 seconds mission done
-        # TODO handle heartbeats somehow (probably send and receive)
         self._drone_system_id = drone_system_id 
         self._flight_controller_component_id = flight_controller_component_id
         self._raspberrypi_component_id = raspberrypi_component_id
@@ -132,12 +137,8 @@ class MavlinkConnectionManager:
             0,
             msg_id,
             int(interval*1e6),
-            0,
-            0,
-            0,
-            0,
-            0
-        )
+            0, 0, 0, 0, 0
+            )
 
     def __telemetry_loop(
             self
@@ -164,13 +165,23 @@ class MavlinkConnectionManager:
                 1
                 )
 
+        self.__set_message_interval(
+                mavutil.mavlink.MAVLINK_MSG_ID_LOCAL_POSITION_NED, 
+                0.25
+                )
+
         while True: 
             # send heartbeat
-            if time() - self.__time_last_heartbeat_sent >= self.__heartbeat_period: 
+            if (time() - self.__time_last_heartbeat_sent) >= self.__heartbeat_period:
                 self.__send_heartbeat()
             
             msg = self._mav_conn.recv_match(
-                    type=["GLOBAL_POSITION_INT", "HEARTBEAT", "MISSION_CURRENT"], 
+                    type = [
+                        "GLOBAL_POSITION_INT", 
+                        "HEARTBEAT", 
+                        "MISSION_CURRENT", 
+                        "LOCAL_POSITION_NED",
+                        ], 
                     blocking=True, 
                     timeout=0.15
                     )
@@ -179,12 +190,15 @@ class MavlinkConnectionManager:
                 continue
 
             match msg.get_type(): 
+                case "LOCAL_POSITION_NED":
+                    self.__local_position_ned_handler(msg)
                 case "GLOBAL_POSITION_INT": 
                     self.__global_position_int_handler(msg)
                 case "HEARTBEAT": 
                     self.__heartbeat_handler(msg)
                 case "MISSION_CURRENT":
                     self.__mission_current_handler(msg)
+
 
     def __mission_current_handler(
             self,
@@ -200,12 +214,14 @@ class MavlinkConnectionManager:
             # transition when mission goes active
             case MissionState.INACTIVE: 
                 if msg.mission_state == dialect.MISSION_STATE_ACTIVE: 
+                    logger.info("Mission state transition from INACTIVE to ACTIVE.")
                     self._mission_state = MissionState.ACTIVE 
                     if self.mission_started_cb: 
                         self.mission_started_cb()
             # transition when last waypoint reached
             case MissionState.ACTIVE: 
                 if msg.seq == msg.total:
+                    logger.info("Mission state transition from ACTIVE to RETURNING.")
                     self._mission_state = MissionState.RETURNING
                     # prob should rename this cb
                     if self.mission_ended_cb: 
@@ -213,6 +229,7 @@ class MavlinkConnectionManager:
             # transiiton when drone lands
             case MissionState.RETURNING:
                 if msg.mission_state == dialect.MISSION_STATE_COMPLETE: 
+                    logger.info("Mission state transition from RETURNING to INACTIVE.")
                     self._mission_state = MissionState.INACTIVE
 
     def __heartbeat_handler(
@@ -226,18 +243,29 @@ class MavlinkConnectionManager:
         if msg.get_srcSystem() != self._drone_system_id:
             return
 
-        # mision is active, evaulate a transition to inactive
-        # if self.__mission_active: 
-        #     if msg.custom_mode != dialect.COPTER_MODE_AUTO: 
-        #         self.__mission_active = False
-        #         if self.mission_ended_cb: 
-        #             self.mission_ended_cb()
-        # # misison is not active, evaulate a transition to active
-        # else: 
-        #     if msg.custom_mode == dialect.COPTER_MODE_AUTO:
-        #         self.__mission_active = True 
-        #         if self.mission_started_cb: 
-        #             self.mission_started_cb()
+        if self._mission_state == MissionState.ACTIVE: 
+            if msg.custom_mode == dialect.COPTER_MODE_RTL: 
+                logger.info("Detected RTL, ending mission here.")
+                self._mission_state = MissionState.INACTIVE 
+                if self.mission_ended_cb: 
+                    self.mission_ended_cb()
+
+    def __local_position_ned_handler(
+            self, 
+            msg: dialect.MAVLink_local_position_ned_message,
+            ) -> None:
+        '''
+        Hanndles a local position message.
+        '''
+        if msg.get_srcSystem() != self._drone_system_id:
+            return 
+
+        if self.new_local_position_cb: 
+            self.new_local_position_cb(
+                    msg.x, 
+                    msg.y, 
+                    self._mav_conn.messages["LOCAL_POSITION_NED"]._timestamp
+                    )
 
     def __global_position_int_handler(
             self, 
@@ -246,8 +274,11 @@ class MavlinkConnectionManager:
         '''
         Handles a global position int message.
         '''
-        if self.new_position_cb:
-            self.new_position_cb(
+        if msg.get_srcSystem() != self._drone_system_id:
+            return 
+
+        if self.new_global_position_cb:
+            self.new_global_position_cb(
                     float(msg.lat)/1e7, 
                     float(msg.lon)/1e7, 
                     self._mav_conn.messages["GLOBAL_POSITION_INT"]._timestamp
@@ -272,7 +303,7 @@ class MavlinkConnectionManager:
             payload=payload
         )
         type_name = "HEATMAP" if msg_type == TYPE_RSSI_GLOBAL else "MARKER"
-        print(f"[TX] TUNNEL type={msg_type} ({type_name}) lat={lat:.6f} lon={lon:.6f} rssi={rssi:.1f}")
+        logger.info(f"[TX] TUNNEL type={msg_type} ({type_name}) lat={lat:.6f} lon={lon:.6f} rssi={rssi:.1f}")
 
 
 class MavlinkTelemetryMonitor: 
@@ -281,7 +312,11 @@ class MavlinkTelemetryMonitor:
     '''
     _lat_list: list[float]
     _lon_list: list[float]
-    _time_list: list[float]
+    _global_time_list: list[float]
+
+    _x_list: list[float] 
+    _y_list: list[float]
+    _local_time_list: list[float]
 
     _mav: MavlinkConnectionManager
 
@@ -296,10 +331,15 @@ class MavlinkTelemetryMonitor:
 
         self._lat_list = [] 
         self._lon_list = [] 
-        self._time_list = []
+        self._global_time_list = []
 
-        # register for new global position event
-        self._mav.new_position_cb = self.__new_global_position
+        self._x_list = [] 
+        self._y_list = [] 
+        self._local_time_list = []
+
+        # register for new position events
+        self._mav.new_global_position_cb = self.__new_global_position
+        self._mav.new_local_position_cb = self.__new_local_position
 
     def __new_global_position(
             self, 
@@ -312,7 +352,40 @@ class MavlinkTelemetryMonitor:
         '''
         self._lat_list.append(lat) 
         self._lon_list.append(lon) 
-        self._time_list.append(time)
+        self._global_time_list.append(time)
+
+    def __new_local_position(
+            self, 
+            x: float, 
+            y: float, 
+            time: float
+            ) -> None:
+        '''
+        Save a new local position.
+        '''
+        self._x_list.append(x) 
+        self._y_list.append(y) 
+        self._local_time_list.append(time)
+
+    def write_local_positions_to_file(
+            self, 
+            file: TextIOWrapper,
+            ) -> None: 
+        '''
+        Write local positions to a file.
+        '''
+        w = csv.writer(file)
+        w.writerows(zip(self._x_list, self._y_list, self._local_time_list))
+
+    def write_global_positions_to_file(
+            self, 
+            file: TextIOWrapper, 
+            ) -> None: 
+        '''
+        Write global positions to a file.
+        '''
+        w = csv.writer(file) 
+        w.writerows(zip(self._lat_list, self._lon_list, self._global_time_list))
 
     def clear(
             self
@@ -320,7 +393,12 @@ class MavlinkTelemetryMonitor:
         '''
         Clear the list. (will leave two list elements)
         '''
-        n = len(self._lat_list)      # note that all lists are same length
+        n = len(self._lat_list)      # note that lat and lon lists are same len
         del self._lat_list[:n-2]
         del self._lon_list[:n-2] 
-        del self._time_list[:n-2]
+        del self._global_time_list[:n-2]
+
+        n = len(self._x_list) 
+        del self._x_list[:n-2]
+        del self._y_list[:n-2]
+        del self._local_time_list[:n-2]

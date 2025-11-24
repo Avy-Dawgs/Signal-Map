@@ -51,7 +51,16 @@ def main(argv: list[str]):
         print("Please provide the parameter file as the only argument.")
         return
 
-    logging.basicConfig(handlers=[logging.StreamHandler(), logging.FileHandler("wifi_daemon.log")], level=logging.DEBUG)
+    streamhandler = logging.StreamHandler() 
+    filehandler = logging.FileHandler("wifi_daemon.log")
+    streamhandler.setFormatter(logging.Formatter("[%(name)s %(levelname)s]: %(message)s"))
+    filehandler.setFormatter(logging.Formatter("[%(name)s %(levelname)s %(asctime)s]: %(message)s"))
+    logger = logging.getLogger()
+    logger.handlers = [
+            streamhandler,
+            filehandler,
+            ] 
+    logger.level = logging.DEBUG
 
     # load params 
     params = DaemonParams(argv[1])

@@ -12,6 +12,9 @@ from datetime import datetime
 import struct
 import logging
 
+logger = logging.getLogger(__name__) 
+logger.level = logging.DEBUG
+
 class Control: 
     '''
     Overall program logic.
@@ -21,8 +24,6 @@ class Control:
     _wifi_mon: WifiRssiMonitor
     _log_dir: str
     '''directory to store files'''
-    _message_file: TextIOWrapper
-    '''general log file'''
     _data_file: TextIOWrapper
     '''raw data file'''
     _victim_file: TextIOWrapper 
@@ -33,6 +34,10 @@ class Control:
     '''directory for current mission logs'''
     _last_processed_rssi_time: float
     '''timestamp of last processed RSSI value (to detect new beacon pulses)'''
+
+    _local_position_file: TextIOWrapper 
+    _global_position_file: TextIOWrapper 
+    _wifi_rssi_file: TextIOWrapper
 
     __mission_started_flag: bool
     __mission_ended_flag: bool
@@ -78,6 +83,7 @@ class Control:
         while True:
 
             # wait for start of mission
+            logger.info("Waiting for start of mission.")
             while True: 
                 if self.__mission_started_flag: 
                     self.__mission_started_flag = False
@@ -85,9 +91,13 @@ class Control:
                 sleep(0.25)
 
             # progress through the states
+            logger.info("Mission starting.")
             self.__mision_init()
+            logger.info("Mission initialized.")
             self.__run_mission()
+            logger.info("Mission complete.")
             self.__mission_deinit()
+            logger.info("Mission deinitialized.")
 
     def __mission_started_handler(
             self
@@ -136,7 +146,7 @@ class Control:
                 f.write(str(counter))
         except IOError:
             # If we can't write, still use the counter but warn
-            print(f"[WARNING] Could not write mission counter file, using counter={counter}")
+            logger.warning(f" Could not write mission counter file, using counter={counter}")
         
         return counter
 
@@ -157,18 +167,27 @@ class Control:
         makedirs(self._mission_dir, exist_ok=True)
         
         # Open log files in write mode
-        self._message_file = open(f"{self._mission_dir}/messages.log", "w")
-        self._data_file = open(f"{self._mission_dir}/signal_map.dat", "w")
-        self._victim_file = open(f"{self._mission_dir}/victim.txt", "w")
+        self._data_file = open(path.join(self._mission_dir, "signal_map.dat"), "w")
+        self._victim_file = open(path.join(self._mission_dir, "victim.txt"), "w")
+
+        self._global_position_file = open(path.join(self._mission_dir, "global_positions.csv"), "w") 
+        self._local_position_file = open(path.join(self._mission_dir, "local_positions.csv"), "w")
+        self._wifi_rssi_file = open(path.join(self._mission_dir, "wifi_rssi.csv"), "w")
+
+        # headers for csv file 
+        self._global_position_file.write("latitude,longitude,time\n")
+        self._local_position_file.write("x,y,time\n")
+        self._wifi_rssi_file.write("rssi,time\n")
         
         # Clear collection for new mission
         self._collection.clear()
         self._last_processed_rssi_time = 0.0  # Reset for new mission
+
+        # clear telemetry data 
+        self._telem.clear()
         
         # Log mission start
-        self._message_file.write(f"[{datetime.now().isoformat()}] Mission #{mission_num} started\n")
-        self._message_file.flush()
-        print(f"[CONTROL] Mission #{mission_num} started, logging to {self._mission_dir}")
+        logger.info(f"Mission #{mission_num} started\n")
 
     def __run_mission(
             self
@@ -184,6 +203,11 @@ class Control:
             if self.__mission_ended_flag:
                 self.__mission_ended_flag = False 
                 break 
+
+            # log raw data
+            self._wifi_mon.write_to_file(self._wifi_rssi_file)
+            self._telem.write_local_positions_to_file(self._local_position_file)
+            self._telem.write_global_positions_to_file(self._global_position_file)
             
             # Detect the latest/max RSSI in the recent past
             rssi_time = self._wifi_mon.get_max_rssi(rssi_check_window)
@@ -201,7 +225,7 @@ class Control:
                             point = location_interpolate(
                                 self._telem._lat_list,
                                 self._telem._lon_list,
-                                self._telem._time_list,
+                                self._telem._global_time_list,
                                 rssi_time
                             )
                             
@@ -222,17 +246,10 @@ class Control:
                             self._data_file.flush()
                             
                             # Log message
-                            log_msg = f"[{datetime.now().isoformat()}] DataPoint (beacon pulse): lat={point.latitude:.6f}, lon={point.longitude:.6f}, rssi={point.rssi:.1f} dBm\n"
-                            self._message_file.write(log_msg)
-                            self._message_file.flush()
-                            
-                            print(f"[CONTROL] Processed beacon pulse: rssi={point.rssi:.1f} dBm at ({point.latitude:.6f}, {point.longitude:.6f})")
+                            logger.info(f"DataPoint (beacon pulse): lat={point.latitude:.6f}, lon={point.longitude:.6f}, rssi={point.rssi:.1f} dBm")
                             
                         except Exception as e:
-                            error_msg = f"[{datetime.now().isoformat()}] Error processing data point: {e}\n"
-                            self._message_file.write(error_msg)
-                            self._message_file.flush()
-                            print(f"[CONTROL] Error: {e}")
+                            logger.error(f"Error processing data point: {e}\n")
                     else:
                         # Not enough location data yet - skip this pulse
                         pass
@@ -248,7 +265,6 @@ class Control:
         Run once when mission ends.
         Calculates victim location, sends final marker, and writes summary files.
         '''
-        self._message_file.write(f"[{datetime.now().isoformat()}] Mission ended\n")
         
         # Calculate victim location using weighted average of strongest signals
         if len(self._collection) > 0:
@@ -301,22 +317,22 @@ class Control:
                         self._victim_file.write(f"\nDistance between methods: {dist:.2f} meters\n")
                     
                     # Log summary
-                    summary = f"[{datetime.now().isoformat()}] Mission summary:\n"
+                    summary = f"Mission summary:\n"
                     summary += f"  Total data points: {len(self._collection)}\n"
                     summary += f"  Victim location: ({victim_lat:.6f}, {victim_lon:.6f})\n"
                     summary += f"  Average RSSI: {avg_rssi:.1f} dBm\n"
-                    self._message_file.write(summary)
-                    self._message_file.flush()
-                    print(f"[CONTROL] Mission complete: {len(self._collection)} data points collected")
-                    print(f"[CONTROL] Victim location: ({victim_lat:.6f}, {victim_lon:.6f})")
+                    logger.info(summary)
         else:
             self._victim_file.write("No data points collected during mission.\n")
-            self._message_file.write(f"[{datetime.now().isoformat()}] No data points collected\n")
-            self._message_file.flush()
+            logger.info(f"No data points collected\n")
             print("[CONTROL] Mission complete: No data points collected")
 
         # close files 
-        self._message_file.close() 
         self._data_file.close() 
         self._victim_file.close()
-        print(f"[CONTROL] Log files closed for {self._mission_dir}")
+
+        self._global_position_file.close() 
+        self._local_position_file.close()
+        self._wifi_rssi_file.close() 
+
+        logging.info(f"Mission files closed for {self._mission_dir}")
