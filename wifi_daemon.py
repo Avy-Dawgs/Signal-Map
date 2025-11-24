@@ -6,6 +6,7 @@ from sys import argv
 from xmltodict import parse, unparse
 from xml.dom.minidom import parseString
 import logging
+from os import path
 
 from mavlink import MavlinkConnectionManager, MavlinkTelemetryMonitor
 from control import Control
@@ -51,8 +52,11 @@ def main(argv: list[str]):
         print("Please provide the parameter file as the only argument.")
         return
 
+    # load params 
+    params = DaemonParams(argv[1])
+
     streamhandler = logging.StreamHandler() 
-    filehandler = logging.FileHandler("wifi_daemon.log")
+    filehandler = logging.FileHandler(path.join(params.log_directory, "wifi_daemon.log"))
     streamhandler.setFormatter(logging.Formatter("[%(name)s %(levelname)s]: %(message)s"))
     filehandler.setFormatter(logging.Formatter("[%(name)s %(levelname)s %(asctime)s]: %(message)s"))
     logger = logging.getLogger()
@@ -62,8 +66,6 @@ def main(argv: list[str]):
             ] 
     logger.level = logging.DEBUG
 
-    # load params 
-    params = DaemonParams(argv[1])
 
     # init mavlink manager and telemetry
     mavlink_manager = MavlinkConnectionManager(
