@@ -3,6 +3,7 @@ For the monitoring of WiFi RSSI.
 '''
 from io import TextIOWrapper
 import csv
+import _csv
 from threading import Thread 
 from typing import Optional
 from pyric import pyw 
@@ -114,6 +115,8 @@ class WifiRssiMonitor:
     __monitor_thread: Thread
     _seconds_of_data: int
     _ssid: str
+    __log_incoming: bool
+    __csv_writer: _csv.writer
 
     def __init__(
             self, 
@@ -127,6 +130,8 @@ class WifiRssiMonitor:
         self._ssid = ssid
         self.__wifi = wifi
         self.__wifi.start_monitor_mode(kill_processes)
+
+        self.__log_incoming = False
 
         # start on channel 1
         self.__wifi.set_channel(1)
@@ -231,6 +236,24 @@ class WifiRssiMonitor:
         logger.info(f"Found strongest beacon on channel {current_ch}")
         return current_ch
 
+    def start_logging(
+            self, 
+            file: TextIOWrapper
+            ) -> None: 
+        '''
+        Start logging using given file. 
+        '''
+        self.__log_incoming = True 
+        self.__csv_writer = csv.writer(file)
+
+    def stop_logging(
+            self
+            ) -> None: 
+        '''
+        Stop logging.
+        '''
+        self.__log_incoming = False
+
     def __monitor(
             self
             ) -> None: 
@@ -262,6 +285,9 @@ class WifiRssiMonitor:
                 time = float(pkt.time)
                 self._rssi_list.append(rssi) 
                 self._time_list.append(time)
+
+                if self.__log_incoming: 
+                    self.__csv_writer.writerows([[rssi, time]])
 
                 ch = dot11beacon.network_stats().get("channel")
                 if ch:

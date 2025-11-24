@@ -178,6 +178,14 @@ class Control:
         self._global_position_file.write("latitude,longitude,time\n")
         self._local_position_file.write("x,y,time\n")
         self._wifi_rssi_file.write("rssi,time\n")
+
+        self._telem.start_logging(
+                self._local_position_file, 
+                self._global_position_file
+                ) 
+        self._wifi_mon.start_logging(
+                self._wifi_rssi_file
+                )
         
         # Clear collection for new mission
         self._collection.clear()
@@ -204,11 +212,6 @@ class Control:
                 self.__mission_ended_flag = False 
                 break 
 
-            # log raw data
-            self._wifi_mon.write_to_file(self._wifi_rssi_file)
-            self._telem.write_local_positions_to_file(self._local_position_file)
-            self._telem.write_global_positions_to_file(self._global_position_file)
-            
             # Detect the latest/max RSSI in the recent past
             rssi_time = self._wifi_mon.get_max_rssi(rssi_check_window)
             
@@ -265,6 +268,9 @@ class Control:
         Run once when mission ends.
         Calculates victim location, sends final marker, and writes summary files.
         '''
+
+        self._telem.stop_logging()
+        self._wifi_mon.stop_logging()
         
         # Calculate victim location using weighted average of strongest signals
         if len(self._collection) > 0:
@@ -335,4 +341,4 @@ class Control:
         self._local_position_file.close()
         self._wifi_rssi_file.close() 
 
-        logging.info(f"Mission files closed for {self._mission_dir}")
+        logger.info(f"Mission files closed for {self._mission_dir}")

@@ -2,6 +2,7 @@
 For communicating with the drone/base station over MavLink.
 '''
 import csv
+import _csv
 from io import TextIOWrapper
 from pymavlink import mavutil
 from enum import Enum
@@ -320,6 +321,11 @@ class MavlinkTelemetryMonitor:
 
     _mav: MavlinkConnectionManager
 
+    __global_position_csv_writer: _csv.writer
+    __local_position_csv_writer: _csv.writer
+    __log_incoming: bool 
+    '''Log the data as it comes in?'''
+
     def __init__(
             self, 
             mav: MavlinkConnectionManager
@@ -328,6 +334,8 @@ class MavlinkTelemetryMonitor:
         Contructor.
         '''
         self._mav = mav
+
+        self.__log_incoming = False
 
         self._lat_list = [] 
         self._lon_list = [] 
@@ -354,6 +362,9 @@ class MavlinkTelemetryMonitor:
         self._lon_list.append(lon) 
         self._global_time_list.append(time)
 
+        if self.__log_incoming: 
+            self.__global_position_csv_writer.writerows([[lat, lon, time]])
+
     def __new_local_position(
             self, 
             x: float, 
@@ -366,6 +377,30 @@ class MavlinkTelemetryMonitor:
         self._x_list.append(x) 
         self._y_list.append(y) 
         self._local_time_list.append(time)
+
+        if self.__log_incoming: 
+            self.__local_position_csv_writer.writerows([[x, y, time]])
+
+    def start_logging(
+            self,
+            local_position_file: TextIOWrapper,
+            global_position_file: TextIOWrapper,
+            ) -> None: 
+        '''
+        Start logging incoming data.
+        '''
+        self.__log_incoming = True 
+
+        self.__global_position_csv_writer = csv.writer(global_position_file)
+        self.__local_position_csv_writer = csv.writer(local_position_file)
+
+    def stop_logging(
+            self, 
+            ) -> None: 
+        '''
+        Stop logging incoming data. 
+        '''
+        self.__log_incoming = False
 
     def write_local_positions_to_file(
             self, 
