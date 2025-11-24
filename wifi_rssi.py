@@ -237,7 +237,12 @@ class WifiRssiMonitor:
         '''
         Run as background thread to monitor rssi.
         '''
-        sniff(iface=self.__wifi._card_name, prn=self.__handle_packet, store=0)
+        # loop and try forever because I have seen this command crash occasionally
+        while True: 
+            try:
+                sniff(iface=self.__wifi._card_name, prn=self.__handle_packet, store=0)
+            except: 
+                logger.error("Scapy sniff crashed, restarting.")
 
     def __handle_packet(
             self, 
