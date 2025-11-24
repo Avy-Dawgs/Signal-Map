@@ -9,7 +9,7 @@ from enum import Enum
 import struct
 from pymavlink.dialects.v20 import ardupilotmega as dialect
 from typing import Callable, Optional
-from time import time
+from time import time, sleep
 from threading import Thread
 import logging
 
@@ -51,7 +51,6 @@ class MavlinkConnectionManager:
     _drone_system_id: int 
     _flight_controller_component_id: int
     _raspberrypi_component_id: int
-    _enc: dialect.MAVLink
     __telemetry_thread: Thread
     __time_last_heartbeat_sent: float
     __heartbeat_period: float = 1.0     # this could become parameter
@@ -79,19 +78,21 @@ class MavlinkConnectionManager:
         self._mission_state = MissionState.INACTIVE
         self.__time_last_heartbeat_sent = 0.0
 
-        self._mav_conn = mavutil.mavlink_connection(
-                mav_str, 
-                source_system=drone_system_id, 
-                source_component=raspberrypi_component_id,
-                baud=baud
-            )
-
-        # encoder
-        self._enc = dialect.MAVLink(
-                None, 
-                drone_system_id, 
-                raspberrypi_component_id
-                )
+        # retry infinitely
+        connected = False
+        while not connected:
+            try:
+                self._mav_conn = mavutil.mavlink_connection(
+                        mav_str, 
+                        source_system=drone_system_id, 
+                        source_component=raspberrypi_component_id,
+                        baud=baud
+                    )
+                connected = True
+            except: 
+                logger.critical("MavLink connection failed, will retry infinitely.")
+                sleep(0.5)
+                pass
 
         self._drone_system_id = drone_system_id 
         self._flight_controller_component_id = flight_controller_component_id
