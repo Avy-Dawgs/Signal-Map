@@ -167,7 +167,7 @@ class Control:
         makedirs(self._mission_dir, exist_ok=True)
         
         # Open log files in write mode
-        self._data_file = open(path.join(self._mission_dir, "signal_map.dat"), "w")
+        self._data_file = open(path.join(self._mission_dir, "signal_map.dat"), "wb")
         self._victim_file = open(path.join(self._mission_dir, "victim.txt"), "w")
 
         self._global_position_file = open(path.join(self._mission_dir, "global_positions.csv"), "w") 
@@ -245,7 +245,7 @@ class Control:
                             
                             # Write to data file (binary format: lat, lon, rssi as floats)
                             data_bytes = struct.pack('<fff', point.latitude, point.longitude, point.rssi)
-                            self._data_file.write(str(data_bytes))
+                            self._data_file.write(data_bytes)
                             self._data_file.flush()
                             
                             # Log message
