@@ -3,7 +3,7 @@ from time import sleep
 import logging
 
 def main(): 
-    card_name = "wlp0s20f3"
+    card_name = "wlan0"
     ssid = "beacon"
 
     logging.basicConfig(handlers=[logging.StreamHandler()], level=logging.DEBUG)
@@ -24,7 +24,7 @@ def main():
         print("Exiting")
         print(e)
     finally:
-        monitor.stop(True)
+        monitor.stop(False)
 
 if __name__ == "__main__": 
     main()

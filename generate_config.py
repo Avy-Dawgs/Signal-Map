@@ -23,7 +23,7 @@ params.wifi_card_name = "wlan0"
 params.beacon_period = 1.0
 params.beacon_ssid = "beacon"
 
-params.log_directory = "/home/kali/logs/"
+params.log_directory = "/home/kali/Signal-Map-logs/"
 params.serial_baud = 115200
 
 params.save(savefile)

@@ -6,7 +6,7 @@ from sys import argv
 from xmltodict import parse, unparse
 from xml.dom.minidom import parseString
 import logging
-from os import path
+from os import path, makedirs
 
 from mavlink import MavlinkConnectionManager, MavlinkTelemetryMonitor
 from control import Control
@@ -55,6 +55,8 @@ def main(argv: list[str]):
     # load params 
     params = DaemonParams(argv[1])
 
+    makedirs(params.log_directory, exist_ok=True)
+
     streamhandler = logging.StreamHandler() 
     filehandler = logging.FileHandler(path.join(params.log_directory, "wifi_daemon.log"))
     streamhandler.setFormatter(logging.Formatter("[%(name)s %(levelname)s]: %(message)s"))
@@ -64,7 +66,34 @@ def main(argv: list[str]):
             streamhandler,
             filehandler,
             ] 
-    logger.level = logging.DEBUG
+    logger.level = logging.INFO 
+
+    counter_file = path.join(params.log_directory, ".daemon_run_count")
+    try:
+        # Try to read existing counter
+        if path.exists(counter_file):
+            with open(counter_file, "r") as f:
+                counter = int(f.read().strip())
+        else:
+            counter = 0
+    except (ValueError, IOError):
+        # If file is corrupted or can't be read, start from 0
+        counter = 0
+    
+    # Increment counter
+    counter += 1
+    
+    # Write back to file
+    try:
+        with open(counter_file, "w") as f:
+            f.write(str(counter))
+    except IOError:
+        # If we can't write, still use the counter but warn
+        logger.warning(f" Could not write to run count file")
+
+    logger.info("=================================================")
+    logger.info(f"This daemon has been started {counter} times.")
+    logger.info("=================================================")
 
 
     # init mavlink manager and telemetry
