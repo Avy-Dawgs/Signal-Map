@@ -5,7 +5,7 @@ from io import TextIOWrapper
 from mavlink import MavlinkConnectionManager, MavlinkTelemetryMonitor, TYPE_RSSI_GLOBAL, TYPE_VICTIM_MARKER
 from wifi_rssi import WifiRssiMonitor
 from DataPoint import DataPoint, DataPointCollection
-from processing import location_interpolate
+from processing import location_interpolate, determine_final_victims
 from time import sleep, time
 from os import makedirs, path
 from datetime import datetime
@@ -272,62 +272,68 @@ class Control:
         self._telem.stop_logging()
         self._wifi_mon.stop_logging()
         
-        # Calculate victim location using weighted average of strongest signals
+        # Calculate victim locations using Monte Carlo hill climbing and support filtering
         if len(self._collection) > 0:
-            # Get top 10% of strongest signals (minimum 3 points)
-            all_points = sorted(self._collection.data_points, key=lambda p: p.rssi, reverse=True)
-            top_count = max(3, len(all_points) // 10)
-            top_points = all_points[:top_count]
+            victims = determine_final_victims(self._collection.data_points, max_victims=3)
             
-            if len(top_points) > 0:
-                # Weighted average by RSSI (convert to linear scale for weighting)
-                total_weight = 0.0
-                weighted_lat = 0.0
-                weighted_lon = 0.0
-                rssi_sum = 0.0
+            if victims:
+                # Write all detected victims to file
+                self._victim_file.write(f"Detected {len(victims)} victim(s):\n")
+                self._victim_file.write("=" * 60 + "\n\n")
                 
-                for point in top_points:
-                    # Convert dBm to linear scale: weight = 10^(rssi/10)
-                    weight = 10 ** (point.rssi / 10.0)
-                    total_weight += weight
-                    weighted_lat += point.latitude * weight
-                    weighted_lon += point.longitude * weight
-                    rssi_sum += point.rssi
-                
-                if total_weight > 0:
-                    victim_lat = weighted_lat / total_weight
-                    victim_lon = weighted_lon / total_weight
-                    avg_rssi = rssi_sum / len(top_points)
-                    
+                # Send victim markers and write to file
+                for i, (victim_lat, victim_lon, victim_rssi) in enumerate(victims, 1):
                     # Send victim marker
                     self._mav._send_tunnel_message(
                         victim_lat,
                         victim_lon,
-                        avg_rssi,
+                        victim_rssi,
                         TYPE_VICTIM_MARKER
                     )
                     
                     # Write victim location to file
-                    self._victim_file.write(f"Victim Location (weighted average of top {len(top_points)} signals):\n")
-                    self._victim_file.write(f"Latitude: {victim_lat:.6f}\n")
-                    self._victim_file.write(f"Longitude: {victim_lon:.6f}\n")
-                    self._victim_file.write(f"Average RSSI: {avg_rssi:.1f} dBm\n")
+                    self._victim_file.write(f"Victim {i}:\n")
+                    self._victim_file.write(f"  Latitude: {victim_lat:.6f}\n")
+                    self._victim_file.write(f"  Longitude: {victim_lon:.6f}\n")
+                    self._victim_file.write(f"  RSSI: {victim_rssi:.1f} dBm\n")
+                    self._victim_file.write("\n")
+                
+                # Also write strongest single point for reference
+                self._victim_file.write(f"\nStrongest single point:\n")
+                strongest = self._collection.strongest()
+                if strongest:
+                    self._victim_file.write(f"Latitude: {strongest.latitude:.6f}\n")
+                    self._victim_file.write(f"Longitude: {strongest.longitude:.6f}\n")
+                    self._victim_file.write(f"RSSI: {strongest.rssi:.1f} dBm\n")
+                
+                # Log summary
+                summary = f"Mission summary:\n"
+                summary += f"  Total data points: {len(self._collection)}\n"
+                summary += f"  Detected {len(victims)} victim(s):\n"
+                for i, (v_lat, v_lon, v_rssi) in enumerate(victims, 1):
+                    summary += f"    Victim {i}: ({v_lat:.6f}, {v_lon:.6f}), RSSI: {v_rssi:.1f} dBm\n"
+                logger.info(summary)
+            else:
+                # Fallback to strongest point if algorithm finds no victims
+                strongest = self._collection.strongest()
+                if strongest:
+                    self._victim_file.write("No victims detected by algorithm.\n")
                     self._victim_file.write(f"\nStrongest single point:\n")
-                    strongest = self._collection.strongest()
-                    if strongest:
-                        self._victim_file.write(f"Latitude: {strongest.latitude:.6f}\n")
-                        self._victim_file.write(f"Longitude: {strongest.longitude:.6f}\n")
-                        self._victim_file.write(f"RSSI: {strongest.rssi:.1f} dBm\n")
-                        # Calculate distance between methods
-                        dist = strongest.distance_to(DataPoint(victim_lat, victim_lon, avg_rssi))
-                        self._victim_file.write(f"\nDistance between methods: {dist:.2f} meters\n")
+                    self._victim_file.write(f"Latitude: {strongest.latitude:.6f}\n")
+                    self._victim_file.write(f"Longitude: {strongest.longitude:.6f}\n")
+                    self._victim_file.write(f"RSSI: {strongest.rssi:.1f} dBm\n")
                     
-                    # Log summary
-                    summary = f"Mission summary:\n"
-                    summary += f"  Total data points: {len(self._collection)}\n"
-                    summary += f"  Victim location: ({victim_lat:.6f}, {victim_lon:.6f})\n"
-                    summary += f"  Average RSSI: {avg_rssi:.1f} dBm\n"
-                    logger.info(summary)
+                    # Send strongest point as fallback
+                    self._mav._send_tunnel_message(
+                        strongest.latitude,
+                        strongest.longitude,
+                        strongest.rssi,
+                        TYPE_VICTIM_MARKER
+                    )
+                else:
+                    self._victim_file.write("No data points collected during mission.\n")
+                    logger.info(f"No data points collected\n")
+                    print("[CONTROL] Mission complete: No data points collected")
         else:
             self._victim_file.write("No data points collected during mission.\n")
             logger.info(f"No data points collected\n")
